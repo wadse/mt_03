@@ -1,0 +1,119 @@
+#!/usr/bin/env python
+import optparse
+import glob
+import os
+import string
+import nltk
+import math
+import re
+import sys
+import random
+from collections import Counter, defaultdict # multiset represented by dictionary
+
+scorenum = 11
+pennum = 10
+modnum = 3
+
+optparser = optparse.OptionParser()
+optparser.add_option("-d", "--data-dir", dest="data", default="dev_eval/", help="Directory containing system outputs")
+optparser.add_option("-n", "--number", dest="iter", default=10, type="int", help="number of random restarts to go through")
+(opts,_) = optparser.parse_args()
+(source, reference) = (opts.data + "/source", opts.data + "/reference")
+
+oracle = [
+    'systemO',
+    'systemE',
+    'systemN',
+    'systemC',
+    'systemB',
+    'systemJ',
+    'systemD',
+    'systemI',
+    'systemK',
+    'systemF',
+    'systemG',
+    'systemH',
+    'systemA',
+    'systemM',
+    'systemL'
+    ]
+
+n = len(oracle)
+
+def score(params):
+
+    score_w = params[0:scorenum]
+    penalty_w = params[scorenum:scorenum + pennum]
+    pre_w = params[scorenum + pennum:]
+    final = defaultdict(float)
+
+    for (filenum, f) in enumerate(glob.glob(opts.data + '/*')):
+        ptr = open(f)
+        for full_line in ptr:
+            line = full_line.split()
+            if len(line) == 0: continue
+            name = line[0]
+            score_p = line[1:1 + scorenum]
+            penalty_p = line[1 + scorenum:]
+            score = 1.0
+            for (i, sc) in enumerate(score_p):
+                score += float(sc) * score_w[i]
+            penalty = 1.0
+            for (i, pe) in enumerate(penalty_p):
+                penalty *= pow(float(pe), penalty_w[i])
+            final[name] += pre_w[filenum] * score * penalty
+
+    distance = 0.0
+    solution = sorted(final.keys(), key = lambda x: -final[x])
+    for (i, name) in enumerate(solution):
+        j = oracle.index(name)
+        distance += pow(i - j, 2)
+    sc = 1 - 6 * distance / (n * (n*n - 1))
+    return (sc, solution)
+
+def tweak_score():
+    gamma = 0.01
+    params = [random.random() for i in range(scorenum+pennum+modnum)]
+    best_score = score(params)[0]
+    best_params = params[:]
+    delta = gamma    
+    while(delta < 1.0):
+        while(True):
+            curr_score = best_score
+            params = best_params[:]
+            for i in range(len(params)):
+                orig_i = params[i]
+                params[i] -= delta
+                new_score = score(params)[0]
+                if new_score >= best_score:
+                    if sum([abs(p) for p in params]) <  sum([abs(p) for p in best_params]):
+                        best_score = new_score
+                        best_params = params[:]
+                params[i] += 2 * delta
+                new_score = score(params)[0]
+                if new_score > best_score:
+                    if sum([abs(p) for p in params]) <  sum([abs(p) for p in best_params]):
+                        best_score = new_score
+                        best_params = params[:]
+                # return to current position
+                params[i] = orig_i
+            if best_score == curr_score: break
+            else: delta = gamma
+        delta += gamma
+    return best_score, best_params
+
+(maxbs, maxbp) = (0.0, 0.0)
+
+final = []
+
+for i in range(opts.iter):
+    (bs, bp) = tweak_score()        
+    print "done iter", i, ", ", bs, ":", bp
+    final.append((bs, bp))
+
+for i in sorted(final, key = lambda f: f[0]):
+    print i
+
+
+
+

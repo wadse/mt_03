@@ -1,0 +1,76 @@
+#!/usr/bin/env python
+import optparse
+import glob
+import string
+import os
+import nltk
+import re
+import sys
+
+prefix = []
+ptr = open("prefix", 'r')
+for line in ptr: prefix.append(line.strip())
+
+suffix = []
+ptr = open("suffix", 'r')
+for line in ptr: suffix.append(line.strip())
+
+stemmer = nltk.stem.porter.PorterStemmer()
+def split(token, y):
+  if y == 0: return token
+  n = len(token)
+  if y == 1:
+    if n < 5: return token
+    elif n == 5: return token[:4] + ' ' + token[3:5]
+    else: return token[:4] + ' ' + token[-2:]
+  elif y == 2:
+    suf = token
+    finalsuf = ''
+    while(len(suf) > 1):
+      if suf in suffix: 
+        finalsuf = suf
+        break
+      suf = suf[1:]
+    if len(finalsuf) == 0: pref = token
+    else: pref = token[:-len(suf)]
+    finalpref = ''
+    while(len(pref) > 1):
+      if pref in prefix:
+        finalpref = pref
+        break
+      pref = pref[:-1]
+    if len(finalsuf) == 0: ret = finalpref + ' ' + token[len(finalpref):]
+    else: ret = finalpref + ' ' + token[len(finalpref):-len(finalsuf)] + ' ' + finalsuf
+    return ret.strip()
+  elif y == 3: return stemmer.stem(token)
+
+# How to tokenize each line  
+def tokenize(line, lower, y):
+  def iter(line):
+    orig = line.split()
+    nonstop = ''.join([c for c in string.punctuation if c != '.'])
+    p = re.compile('[\s]([' + nonstop + '])')
+    line = p.sub(r' \1 ', line)
+    p = re.compile('([' + nonstop + '])[\s]')
+    line = p.sub(r' \1 ', line)
+    if line.split() == orig: return line.split()
+    else: return iter(line)
+  newline = iter(' ' + line + ' ')
+  if lower: newline = [token.lower() for token in newline]
+  newline = [split(token, y) for token in newline] 
+  return ' '.join(newline) + '\n'
+
+optparser = optparse.OptionParser()
+optparser.add_option("-i", "--input-dir", dest="input", default="data/dev", help="Directory containing system outputs")
+optparser.add_option("-o", "--output-dir", dest="output", default="data/devproc", help="Directory to which to write new outputs")
+optparser.add_option("-y", "--type", dest="type", type="int", default=1, help="way to split words, takes values (0..3) - no splitting, AMBER method 4, AMBER method 6, stemming")
+(opts,_) = optparser.parse_args()
+
+for f in glob.glob(opts.input + '/*'):
+  sys.stderr.write("Now processing file %s\n" % (os.path.basename(f)))
+  infile = open(f, 'r')
+  outfile = open(opts.output + '/' + os.path.basename(f), 'w')
+  for line in infile:
+    outfile.write(tokenize(line, True, opts.type))
+
+

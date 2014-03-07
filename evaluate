@@ -1,0 +1,216 @@
+#!/usr/bin/env python
+import optparse
+import glob
+import os
+import string
+import nltk
+import math
+import re
+import sys
+from collections import Counter # multiset represented by dictionary
+
+# note: number of ngrams = max(len(tokens) - n + 1, 0)
+def ngrams(n, tokens): return[tuple(tokens[i:i+n]) for i in xrange(len(tokens) - n + 1)]
+
+# ngrams that allow jumps
+def ngrams_gap(n, tokens, flexi): 
+    T = len(tokens)
+    base = [([i], [tokens[i]]) for i in xrange(T - n + 1)]
+    for _ in xrange(1, n):
+        newbase = []
+        for (curr_i, curr_tok) in base:
+            last = max(curr_i)
+            newbase = newbase + [(curr_i + [i], curr_tok + [tokens[i]]) for i in xrange(last + 1, min(last + 2, T))]
+        base = newbase
+    if flexi: base = [tuple(curr_tok) for (curr_i, curr_tok) in base]
+    else: base = [(tuple([a - b for (a,b) in zip(curr_i[1:], curr_i[:-1])]), tuple(curr_tok)) for (curr_i, curr_tok) in base]
+#    sys.stderr.write(str(n) + ': ' + str(len(base)) + '\n')
+    return base
+
+# return number of matching ngrams
+def match(n, system, ref, matchtype):
+  if matchtype == 'ngram':
+    sys_grams = [ngrams(n, s) for s in system]
+    ref_grams = [ngrams(n, r) for r in ref]
+  elif matchtype == 'fixed':
+    sys_grams = [ngrams_gap(n, s, False) for s in system]
+    ref_grams = [ngrams_gap(n, r, False) for r in ref]
+  elif matchtype == 'flexi':
+    sys_grams = [ngrams_gap(n, s, True) for s in system]
+    ref_grams = [ngrams_gap(n, r, True) for r in ref]
+  matches = sum([sum((Counter(s) & Counter(r)).values()) for (s,r) in zip(sys_grams, ref_grams)])
+  sys_size = sum([len(s) for s in sys_grams])
+  ref_size = sum([len(r) for r in ref_grams])
+  return (float(matches), float(sys_size), float(ref_size))
+
+# PR = Precision and Recall
+def PRn(n, system, ref):
+  (matches, sys_size, ref_size) = match(n, system, ref, opts.matching)
+  precision = matches / sys_size
+  (matches, sys_size, ref_size) = match(n, system, ref, 'ngram')
+  recall = matches / ref_size
+  return precision, recall
+
+# PR = Precision and Recall
+def PRN(N, system, ref):
+  pr = [PRn(n, system, ref) for n in range(1, N+1)]
+  return [x[0] for x in pr], [x[1] for x in pr]
+
+# Geometric average of first n elements in a
+def geom(a, n): return math.exp(1/float(n) * sum([math.log(i) for i in a[:n]]))
+
+# Arithmetic average of first n elements in a
+def arith(a, n): return sum(a[:n])/float(n)
+
+# BP = Brevity Penalty
+def BP(system, ref): return min(1, float(sum([len(x) for x in system])) / sum([len(x) for x in ref])) 
+
+# Standard BLEU score
+def BLEU(N, system, ref):
+  PR = PRN(N, system, ref)
+  score = BP(system, ref)
+  for P in PR[0]:
+    score *= P
+  return score
+
+# Correlation_stats
+def corr_stats(system, ref):
+  sys_order = []
+  ref_order = []
+  matches = Counter(system) & Counter (ref)
+  for match in matches:
+    for _ in xrange(matches[match]):
+      for (i, s) in enumerate(system):
+        if (s == match) and (i not in sys_order):
+          sys_order.append(i)
+          for (j, r) in enumerate(ref):
+            if (r == match) and (j not in ref_order):
+              ref_order.append(j)
+              break
+  n = len(ref_order)
+  concordant = 0
+  discordant = 0
+  for i in xrange(n - 1):
+    for j in xrange(i+1, n):
+      if ((ref_order[i] > ref_order[j] and sys_order[i] > sys_order[j]) or
+          (ref_order[i] < ref_order[j] and sys_order[i] < sys_order[j])):
+        concordant += 1
+      else: discordant += 1
+  distance = sum([pow((r - f), 2) for (r, f) in zip(ref_order, sys_order)])
+  return distance, concordant, discordant, float(n) * (n-1) / 2
+
+# Returns list of AMBER penalties
+# gamma, beta are chunk penalty parameters
+# N is for continuity penalty
+def AMBER_penalty(system, ref, gamma, beta, N):
+
+  def charlen(tokens): return sum([len(token) for token in tokens])
+  def SW_sentence(tokens): return sum([1 for token in tokens if len(token) < 4])
+  def LW_sentence(tokens): return sum([1 for token in tokens if len(token) > 3])
+  def SW_trans(trans): return sum([SW_sentence(s) for s in trans]) 
+  def LW_trans(trans): return sum([LW_sentence(s) for s in trans]) 
+
+  max_tokens = float(sum([max(len(s), len(r)) for (s,r) in zip(system, ref)]))
+  min_tokens = float(sum([min(len(s), len(r)) for (s,r) in zip(system, ref)]))
+  ref_tokens = float(sum([len(r) for r in ref]))
+
+  max_chars = float(sum([max(charlen(s), charlen(r)) for (s,r) in zip(system, ref)]))
+  min_chars = float(sum([min(charlen(s), charlen(r)) for (s,r) in zip(system, ref)]))
+  ref_chars = float(sum([charlen(r) for r in ref]))
+
+  matches = [0] + [float(match(i, system, ref, 'ngram')[0]) for i in xrange(1, N+1)]
+  
+  # Strict Brevity Penalty
+  # 1 when every reference string is shorter or equal to system string
+  # e^{-p}; p > 0 when some reference strings are longer than system string
+  SBP = math.exp(1 - ref_tokens / min_tokens) 
+  # Strint Redundancy Penalty
+  # 1 when every reference token is longer or equal to system string
+  # e^{-p}; p > 0 when some reference strings are shorter than system string
+  SRP = math.exp(1 - max_tokens / ref_tokens) ############################
+  # Character-based versions of same penalties
+  CSBP = math.exp(1 - ref_chars / min_chars)
+  CSRP = math.exp(1 - max_chars / ref_chars) #############################
+
+  # Short word difference penalty
+  SWDP = math.exp(-abs(SW_trans(system) - SW_trans(ref)) / ref_tokens) ##############
+  # Long word difference penalty
+  LWDP = math.exp(-abs(LW_trans(system) - LW_trans(ref)) / ref_tokens)
+
+  # Chunk penalty; fewer chunks = better = higher CKP
+  chunks = matches[1] - matches[2]           #############################
+  CKP = 1 - gamma * pow((chunks / matches[1]), beta)
+  # Continuity penalty
+  segments = len(system)
+  CTP = math.exp(-1/float(N-1) * sum([matches[n] / (matches[n-1] - segments) 
+                                         for n in xrange(2, N+1)]))
+
+  # Normalized Spearman's correlation penalty
+  # Normalized Kendall's correlation penalty
+  distance = 0.0
+  concordant = 0.0
+  discordant = 0.0
+  pairs = 0.0
+  for (s, r) in zip(system, ref):
+    cs = corr_stats(s, r)
+    distance += cs[0]
+    concordant += cs[1]
+    discordant += cs[2]
+    pairs += cs[3]
+  rho = 1 - distance / ((matches[1] - 1) * matches[1] * (matches[1] + 1))
+  tau = (concordant - discordant) / pairs
+  NSCP = (1 + rho) / 2
+  NKCP = (1 + tau) / 2
+
+  return SBP, SRP, CSBP, CSRP, SWDP, LWDP, CKP, CTP, NSCP, NKCP
+
+def AMBER_score(system, ref, N, M, alpha):
+  def weighted(alpha, x, y): return float(alpha * x + (1-alpha) * y)
+  pr = PRN(max(N, M), system, ref)
+  p = pr[0]
+  r = pr[1]
+  results = p + r
+  avgPN = geom(p, N)
+  PN = arith(p, N)
+  RM = arith(r, M)
+  Fmean = PN * RM / weighted(alpha, PN, RM)
+  avgF = sum([p[n] * r[n] / weighted(alpha, p[n], r[n]) for n in range(N)]) / N
+  results = [avgPN, Fmean, avgF] + results
+  return results
+
+def AMBER(sysname, system, ref, N, M, alpha, gamma, beta):
+  scores = AMBER_score(system, ref, N, M, alpha)
+  penalties = AMBER_penalty(system, ref, gamma, beta, N)
+  wscore = [0.2, 0.42]
+  wpen = [1.0, -1.0, 1.0, -1.0, 1.0, 1.0, 1.0, -1.0, 1.0, 2.0]
+  wscore.append(1.0 - sum(wscore))
+  score = sum([w*s for (w, s) in zip(wscore, scores[:3])])
+  penalty = 1.0
+  for i in xrange(len(penalties)):
+    penalty *= pow(penalties[i], wpen[i])
+  if (opts.verbose == "on"):
+      print ' '.join([sysname] + [str(s) for s in scores] + [str(p) for p in penalties]) + '\n'
+  return score * penalty
+
+optparser = optparse.OptionParser()
+optparser.add_option("-d", "--data-dir", dest="data", default="data/devproc", help="Directory containing system outputs")
+optparser.add_option("-m", "--matching", dest="matching", default="ngram", help="how to do matching: ngram, fixed, or flexi(ble)")
+optparser.add_option("-v", "--verbose", dest="verbose", default="off", help="print system attributes instead of ranks; only for AMBER")
+(opts,_) = optparser.parse_args()
+(source, reference) = (opts.data + "/source", opts.data + "/reference")
+
+ref = [line.split() for line in open(reference)]
+
+# read and score each system and output ordered by score
+sys_scores = [(os.path.basename(f), AMBER(os.path.basename(f), [line.split() for line in open(f)], 
+                                          ref, 4, 1, 0.8, 0.3, 0.8)) 
+              for f in glob.glob(opts.data + "/*") if f != reference and f != source]
+
+#sys_scores = [(os.path.basename(f), BLEU(4, [line.split() for line in open(f)], ref)) 
+#              for f in glob.glob(opts.data + "/*") if f != reference and f != source]
+
+for (sysname, score) in sorted(sys_scores, key=lambda x: -x[1]):
+    if opts.verbose == "off":
+        print sysname
+
+
