@@ -1,0 +1,62 @@
+preproc:
+This file is used to pre-process input. It has 3 inputs:
+-i: input directory
+-o: output directory
+-y: type of splitting
+    0: no splitting
+    1: split by AMBER method 4 (split when |word| > 3)
+    2: split by AMBER method 6 (split by prefix/suffix)
+    3: take stem of word
+Before splitting takes place, input is tokenized and lower-cased.
+Prefixed and suffixes were found at:
+suffixes: http://en.wiktionary.org/wiki/Appendix:English_suffixes#English
+prefixes: en.wikipedia.org/wiki/List_of_Greek_and_Latin_roots
+
+evaluate:
+This file is used to rank systems according to BLEU or AMBER.
+For AMBER model, use -v = "on" to print system attributes rather
+than ranks.
+
+To switch between AMBER/BLEU, models and parameters can be set
+at the bottom of the page by (un)commenting the appropriate sections.
+
+combine files:
+These files were used to combine system attributes by trying different
+weights. They are used for developing the model, so parameters are
+left to be tuned in the files. The input to these files is the output
+of the 'evaluate' file when the -v option is turned "on".
+
+The most important things to change in the files are the number of 
+scores, penalties, and systems (at the top of each file) and the input
+parameters (at the bottom of the combine_test file).
+
+The combine_dev file does basic hill-climbing with combined with 
+random restart to try to find the best combination of parameters.
+
+An example workflow that I tried:
+
+./preproc -y 1 -i data/test -o data/testproc1
+./preproc -y 2 -i data/test -o data/testproc2
+./preproc -y 1 -i data/dev -o data/devproc1
+./preproc -y 2 -i data/dev -o data/devproc2
+
+./evaluate -d data/testproc1 -m "ngram" > test_eval/eval_ngram_1
+./evaluate -d data/testproc2 -m "ngram" > test_eval/eval_ngram_2
+
+./evaluate -d data/testproc1 -m "fixed" > test_eval/eval_fixed_1
+./evaluate -d data/testproc2 -m "fixed" > test_eval/eval_fixed_2
+
+./evaluate -d data/testproc1 -m "flexi" > test_eval/eval_flexi_1
+./evaluate -d data/testproc2 -m "flexi" > test_eval/eval_flexi_2
+
+[ and the same for dev data ]
+
+./combine_dev -d test_eval
+
+Then, copy the input parameters you would like to use to combine_test
+and run 
+
+./combine_test -d test_eval
+
+for final results.
+
